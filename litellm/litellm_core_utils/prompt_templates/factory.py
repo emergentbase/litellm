@@ -1198,6 +1198,8 @@ def convert_to_anthropic_tool_result(
         anthropic_tool_result = AnthropicMessagesToolResultParam(
             type="tool_result", tool_use_id=tool_call_id, content=anthropic_content
         )
+        if message.get('is_error', False) or False == True:
+            anthropic_tool_result['is_error'] = True
 
     if message["role"] == "function":
         function_message: ChatCompletionFunctionMessage = message
