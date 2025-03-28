@@ -1,6 +1,6 @@
 import base64
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
@@ -253,6 +253,49 @@ class ChunkProcessor:
             transcript="".join(transcript_list),
             id=id,
         )
+
+    def get_thinking_content(
+        self, chunks: List[Dict[str, Any]]
+    ) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
+        """
+        Extract reasoning content and thinking blocks from stream chunks.
+        
+        Args:
+            chunks: List of stream chunks
+            
+        Returns:
+            Tuple containing:
+            - reasoning_content: Combined reasoning content as a string
+            - thinking_blocks: List of thinking blocks with their type, content, and signature
+        """
+        reasoning_content_list: List[str] = []
+        all_thinking_blocks: List[Dict[str, Any]] = []
+        
+        for chunk in chunks:
+            choices = chunk["choices"]
+            for choice in choices:
+                delta = choice.get("delta", {})
+                
+                # Extract reasoning_content
+                reasoning = delta.get("reasoning_content", "")
+                if reasoning:
+                    reasoning_content_list.append(reasoning)
+                
+                # Extract thinking_blocks
+                thinking_blocks = delta.get("thinking_blocks", [])
+                if thinking_blocks:
+                    all_thinking_blocks.extend(thinking_blocks)
+                
+                # Also check provider_specific_fields for thinking blocks (Anthropic format)
+                provider_fields = delta.get("provider_specific_fields", {})
+                if provider_fields and "thinking_blocks" in provider_fields:
+                    all_thinking_blocks.extend(provider_fields["thinking_blocks"])
+        
+        # Combine reasoning content
+        combined_reasoning = "".join(reasoning_content_list) if reasoning_content_list else None
+        
+        # Return the extracted content
+        return combined_reasoning, all_thinking_blocks if all_thinking_blocks else None
 
     def _usage_chunk_calculation_helper(self, usage_chunk: Usage) -> dict:
         prompt_tokens = 0
