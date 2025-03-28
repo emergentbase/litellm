@@ -956,7 +956,7 @@ def test_bedrock_ptu():
 
 
 @pytest.mark.asyncio
-async def test_bedrock_extra_headers():
+async def test_bedrock_custom_api_base():
     """
     Check if a url with 'modelId' passed in, is created correctly
 
@@ -983,8 +983,46 @@ async def test_bedrock_extra_headers():
         print(f"mock_client_post.call_args.kwargs: {mock_client_post.call_args.kwargs}")
         assert (
             mock_client_post.call_args.kwargs["url"]
-            == "https://gateway.ai.cloudflare.com/v1/fa4cdcab1f32b95ca3b53fd36043d691/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1:0/converse"
+            == "https://gateway.ai.cloudflare.com/v1/fa4cdcab1f32b95ca3b53fd36043d691/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1%3A0/converse"
         )
+        assert "test" in mock_client_post.call_args.kwargs["headers"]
+        assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
+        assert (
+            mock_client_post.call_args.kwargs["headers"]["Authorization"]
+            == "my-test-key"
+        )
+        mock_client_post.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0",
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_extra_headers(model):
+    """
+    Relevant Issue: https://github.com/BerriAI/litellm/issues/9106
+    """
+    client = AsyncHTTPHandler()
+
+    with patch.object(client, "post", new=AsyncMock()) as mock_client_post:
+        litellm.set_verbose = True
+        from openai.types.chat import ChatCompletion
+
+        try:
+            response = await litellm.acompletion(
+                model=model,
+                messages=[{"role": "user", "content": "What's AWS?"}],
+                client=client,
+                extra_headers={"test": "hello world", "Authorization": "my-test-key"},
+            )
+        except Exception as e:
+            print(f"error: {e}")
+
+        print(f"mock_client_post.call_args.kwargs: {mock_client_post.call_args.kwargs}")
         assert "test" in mock_client_post.call_args.kwargs["headers"]
         assert mock_client_post.call_args.kwargs["headers"]["test"] == "hello world"
         assert (
@@ -2344,7 +2382,7 @@ def test_bedrock_cross_region_inference(monkeypatch):
 
         assert (
             mock_post.call_args.kwargs["url"]
-            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.meta.llama3-3-70b-instruct-v1:0/converse"
+            == "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.meta.llama3-3-70b-instruct-v1%3A0/converse"
         )
 
 
@@ -2910,3 +2948,41 @@ async def test_bedrock_stream_thinking_content_openwebui():
     assert (
         len(response_content) > 0
     ), "There should be non-empty content after thinking tags"
+
+
+def test_bedrock_application_inference_profile():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler, AsyncHTTPHandler
+
+    client = HTTPHandler()
+    client2 = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post, patch.object(
+        client2, "post"
+    ) as mock_post2:
+        try:
+            resp = completion(
+                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        try:
+            resp = completion(
+                model="bedrock/converse/arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
+                messages=[{"role": "user", "content": "Hello, how are you?"}],
+                client=client2,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_post.assert_called_once()
+        mock_post2.assert_called_once()
+        print(mock_post.call_args.kwargs)
+        json_data = mock_post.call_args.kwargs["data"]
+        assert mock_post.call_args.kwargs["url"].startswith(
+            "https://bedrock-runtime.eu-central-1.amazonaws.com/"
+        )
+        assert mock_post2.call_args.kwargs["url"] == mock_post.call_args.kwargs["url"]

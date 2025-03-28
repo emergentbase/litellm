@@ -14,8 +14,9 @@ These are members of a Team on LiteLLM
 import asyncio
 import traceback
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Any, List, Optional, Union
+from datetime import date, datetime, timedelta, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional, TypedDict, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -29,10 +30,51 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
+from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy
 
 router = APIRouter()
+
+
+async def create_internal_user_audit_log(
+    user_id: str,
+    action: AUDIT_ACTIONS,
+    litellm_changed_by: Optional[str],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: Optional[str],
+    before_value: Optional[str] = None,
+    after_value: Optional[str] = None,
+):
+    """
+    Create an audit log for an internal user.
+
+    Parameters:
+    - user_id: str - The id of the user to create the audit log for.
+    - action: AUDIT_ACTIONS - The action to create the audit log for.
+    - user_row: LiteLLM_UserTable - The user row to create the audit log for.
+    - litellm_changed_by: Optional[str] - The user id of the user who is changing the user.
+    - user_api_key_dict: UserAPIKeyAuth - The user api key dictionary.
+    - litellm_proxy_admin_name: Optional[str] - The name of the proxy admin.
+    """
+    if not litellm.store_audit_logs:
+        return
+
+    await create_audit_log_for_update(
+        request_data=LiteLLM_AuditLogs(
+            id=str(uuid.uuid4()),
+            updated_at=datetime.now(timezone.utc),
+            changed_by=litellm_changed_by
+            or user_api_key_dict.user_id
+            or litellm_proxy_admin_name,
+            changed_by_api_key=user_api_key_dict.api_key,
+            table_name=LitellmTableNames.USER_TABLE_NAME,
+            object_id=user_id,
+            action=action,
+            updated_values=after_value,
+            before_value=before_value,
+        )
+    )
 
 
 def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
@@ -45,7 +87,7 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
         )
 
     is_internal_user = False
-    if data.user_role == LitellmUserRoles.INTERNAL_USER:
+    if data.user_role and data.user_role.is_internal_user_role:
         is_internal_user = True
         if litellm.default_internal_user_params:
             for key, value in litellm.default_internal_user_params.items():
@@ -169,6 +211,7 @@ async def new_user(
     try:
         from litellm.proxy.proxy_server import (
             general_settings,
+            litellm_proxy_admin_name,
             prisma_client,
             proxy_logging_obj,
         )
@@ -252,6 +295,34 @@ async def new_user(
                 proxy_logging_obj.slack_alerting_instance.send_key_created_or_user_invited_email(
                     webhook_event=event,
                 )
+            )
+
+        try:
+            if prisma_client is None:
+                raise Exception(CommonProxyErrors.db_not_connected_error.value)
+            user_row: BaseModel = await prisma_client.db.litellm_usertable.find_first(
+                where={"user_id": response["user_id"]}
+            )
+
+            user_row_litellm_typed = LiteLLM_UserTable(
+                **user_row.model_dump(exclude_none=True)
+            )
+            asyncio.create_task(
+                create_internal_user_audit_log(
+                    user_id=user_row_litellm_typed.user_id,
+                    action="created",
+                    litellm_changed_by=user_api_key_dict.user_id,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    before_value=None,
+                    after_value=user_row_litellm_typed.model_dump_json(
+                        exclude_none=True
+                    ),
+                )
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Unable to create audit log for user on `/user/new` - {}".format(str(e))
             )
 
         return NewUserResponse(
@@ -365,6 +436,8 @@ async def user_info(
             and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
         ):
             return await _get_user_info_for_proxy_admin()
+        elif user_id is None:
+            user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
@@ -373,10 +446,6 @@ async def user_info(
         ## GET ALL TEAMS ##
         team_list = []
         team_id_list = []
-        # get all teams user belongs to
-        # teams_1 = await prisma_client.get_data(
-        #     user_id=user_id, table_name="team", query_type="find_all"
-        # )
         from litellm.proxy.management_endpoints.team_endpoints import list_team
 
         teams_1 = await list_team(
@@ -651,7 +720,7 @@ async def user_update(
             
     
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     try:
         data_json: dict = data.json()
@@ -664,11 +733,21 @@ async def user_update(
             data_json=data_json, data=data
         )
 
-        existing_user_row = await prisma_client.get_data(
-            user_id=data.user_id, table_name="user", query_type="find_unique"
-        )
+        existing_user_row: Optional[BaseModel] = None
+        if data.user_id is not None:
+            existing_user_row = await prisma_client.db.litellm_usertable.find_first(
+                where={"user_id": data.user_id}
+            )
+            if existing_user_row is not None:
+                existing_user_row = LiteLLM_UserTable(
+                    **existing_user_row.model_dump(exclude_none=True)
+                )
 
-        existing_metadata = existing_user_row.metadata if existing_user_row else {}
+        existing_metadata = (
+            cast(Dict, getattr(existing_user_row, "metadata", {}) or {})
+            if existing_user_row is not None
+            else {}
+        )
 
         non_default_values = prepare_metadata_fields(
             data=data,
@@ -713,10 +792,45 @@ async def user_update(
                         data=non_default_values,
                         table_name="user",
                     )
+
+        if response is not None:  # emit audit log
+            try:
+                user_row: BaseModel = (
+                    await prisma_client.db.litellm_usertable.find_first(
+                        where={"user_id": response["user_id"]}
+                    )
+                )
+
+                user_row_litellm_typed = LiteLLM_UserTable(
+                    **user_row.model_dump(exclude_none=True)
+                )
+                asyncio.create_task(
+                    create_internal_user_audit_log(
+                        user_id=user_row_litellm_typed.user_id,
+                        action="updated",
+                        litellm_changed_by=user_api_key_dict.user_id,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        before_value=(
+                            existing_user_row.model_dump_json(exclude_none=True)
+                            if existing_user_row
+                            else None
+                        ),
+                        after_value=user_row_litellm_typed.model_dump_json(
+                            exclude_none=True
+                        ),
+                    )
+                )
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "Unable to create audit log for user on `/user/update` - {}".format(
+                        str(e)
+                    )
+                )
         return response  # type: ignore
         # update based on remaining passed in values
     except Exception as e:
-        verbose_proxy_logger.error(
+        verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.user_update(): Exception occured - {}".format(
                 str(e)
             )
@@ -1127,4 +1241,293 @@ async def ui_view_users(
         return [LiteLLM_UserTableFiltered(**user.model_dump()) for user in users]
 
     except Exception as e:
+        verbose_proxy_logger.exception(f"Error searching users: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error searching users: {str(e)}")
+
+
+class GroupByDimension(str, Enum):
+    DATE = "date"
+    MODEL = "model"
+    API_KEY = "api_key"
+    TEAM = "team"
+    ORGANIZATION = "organization"
+    MODEL_GROUP = "model_group"
+    PROVIDER = "custom_llm_provider"
+
+
+class SpendMetrics(BaseModel):
+    spend: float = Field(default=0.0)
+    prompt_tokens: int = Field(default=0)
+    completion_tokens: int = Field(default=0)
+    total_tokens: int = Field(default=0)
+    api_requests: int = Field(default=0)
+
+
+class BreakdownMetrics(BaseModel):
+    """Breakdown of spend by different dimensions"""
+
+    models: Dict[str, SpendMetrics] = Field(default_factory=dict)  # model -> metrics
+    providers: Dict[str, SpendMetrics] = Field(
+        default_factory=dict
+    )  # provider -> metrics
+    api_keys: Dict[str, SpendMetrics] = Field(
+        default_factory=dict
+    )  # api_key -> metrics
+
+
+class DailySpendData(BaseModel):
+    date: date
+    metrics: SpendMetrics
+    breakdown: BreakdownMetrics = Field(default_factory=BreakdownMetrics)
+
+
+class DailySpendMetadata(BaseModel):
+    total_spend: float = Field(default=0.0)
+    total_prompt_tokens: int = Field(default=0)
+    total_completion_tokens: int = Field(default=0)
+    total_api_requests: int = Field(default=0)
+    page: int = Field(default=1)
+    total_pages: int = Field(default=1)
+    has_more: bool = Field(default=False)
+
+
+class SpendAnalyticsPaginatedResponse(BaseModel):
+    results: List[DailySpendData]
+    metadata: DailySpendMetadata = Field(default_factory=DailySpendMetadata)
+
+
+class LiteLLM_DailyUserSpend(BaseModel):
+    id: str
+    user_id: str
+    date: str
+    api_key: str
+    model: str
+    model_group: Optional[str] = None
+    custom_llm_provider: Optional[str] = None
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    spend: float = 0.0
+    api_requests: int = 0
+
+
+class GroupedData(TypedDict):
+    metrics: SpendMetrics
+    breakdown: BreakdownMetrics
+
+
+def update_metrics(
+    group_metrics: SpendMetrics, record: LiteLLM_DailyUserSpend
+) -> SpendMetrics:
+    group_metrics.spend += record.spend
+    group_metrics.prompt_tokens += record.prompt_tokens
+    group_metrics.completion_tokens += record.completion_tokens
+    group_metrics.total_tokens += record.prompt_tokens + record.completion_tokens
+    group_metrics.api_requests += record.api_requests
+    return group_metrics
+
+
+def update_breakdown_metrics(
+    breakdown: BreakdownMetrics, record: LiteLLM_DailyUserSpend
+) -> BreakdownMetrics:
+    """Updates breakdown metrics for a single record using the existing update_metrics function"""
+
+    # Update model breakdown
+    if record.model not in breakdown.models:
+        breakdown.models[record.model] = SpendMetrics()
+    breakdown.models[record.model] = update_metrics(
+        breakdown.models[record.model], record
+    )
+
+    # Update provider breakdown
+    provider = record.custom_llm_provider or "unknown"
+    if provider not in breakdown.providers:
+        breakdown.providers[provider] = SpendMetrics()
+    breakdown.providers[provider] = update_metrics(
+        breakdown.providers[provider], record
+    )
+
+    # Update api key breakdown
+    if record.api_key not in breakdown.api_keys:
+        breakdown.api_keys[record.api_key] = SpendMetrics()
+    breakdown.api_keys[record.api_key] = update_metrics(
+        breakdown.api_keys[record.api_key], record
+    )
+
+    return breakdown
+
+
+@router.get(
+    "/user/daily/activity",
+    tags=["Budget & Spend Tracking", "Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+async def get_user_daily_activity(
+    start_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="Start date in YYYY-MM-DD format",
+    ),
+    end_date: Optional[str] = fastapi.Query(
+        default=None,
+        description="End date in YYYY-MM-DD format",
+    ),
+    group_by: List[GroupByDimension] = fastapi.Query(
+        default=[GroupByDimension.DATE],
+        description="Dimensions to group by. Can combine multiple (e.g. date,team)",
+    ),
+    view_by: Literal["team", "organization", "user"] = fastapi.Query(
+        default="user",
+        description="View spend at team/org/user level",
+    ),
+    team_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific team",
+    ),
+    org_id: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific organization",
+    ),
+    model: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific model",
+    ),
+    api_key: Optional[str] = fastapi.Query(
+        default=None,
+        description="Filter by specific API key",
+    ),
+    page: int = fastapi.Query(
+        default=1, description="Page number for pagination", ge=1
+    ),
+    page_size: int = fastapi.Query(
+        default=50, description="Items per page", ge=1, le=100
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> SpendAnalyticsPaginatedResponse:
+    """
+    [BETA] This is a beta endpoint. It will change.
+
+    Meant to optimize querying spend data for analytics for a user.
+
+    Returns:
+    (by date/team/org/user/model/api_key/model_group/provider)
+    - spend
+    - prompt_tokens
+    - completion_tokens
+    - total_tokens
+    - api_requests
+    - breakdown by team, organization, user, model, api_key, model_group, provider
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},
+        )
+
+    try:
+        # Build filter conditions
+        where_conditions: Dict[str, Any] = {
+            "date": {
+                "gte": start_date,
+                "lte": end_date,
+            }
+        }
+
+        if team_id:
+            where_conditions["team_id"] = team_id
+        if org_id:
+            where_conditions["organization_id"] = org_id
+        if model:
+            where_conditions["model"] = model
+        if api_key:
+            where_conditions["api_key"] = api_key
+
+        # Get total count for pagination
+        total_count = await prisma_client.db.litellm_dailyuserspend.count(
+            where=where_conditions
+        )
+
+        # Fetch paginated results
+        daily_spend_data = await prisma_client.db.litellm_dailyuserspend.find_many(
+            where=where_conditions,
+            order=[
+                {"date": "desc"},
+            ],
+            skip=(page - 1) * page_size,
+            take=page_size,
+        )
+
+        # Process results
+        results = []
+        total_metrics = SpendMetrics()
+
+        # Group data by date and other dimensions
+
+        grouped_data: Dict[str, Dict[str, Any]] = {}
+        for record in daily_spend_data:
+            date_str = record.date
+            if date_str not in grouped_data:
+                grouped_data[date_str] = {
+                    "metrics": SpendMetrics(),
+                    "breakdown": BreakdownMetrics(),
+                }
+
+            # Update metrics
+            grouped_data[date_str]["metrics"] = update_metrics(
+                grouped_data[date_str]["metrics"], record
+            )
+            # Update breakdowns
+            grouped_data[date_str]["breakdown"] = update_breakdown_metrics(
+                grouped_data[date_str]["breakdown"], record
+            )
+
+            # Update total metrics
+            total_metrics.spend += record.spend
+            total_metrics.prompt_tokens += record.prompt_tokens
+            total_metrics.completion_tokens += record.completion_tokens
+            total_metrics.total_tokens += (
+                record.prompt_tokens + record.completion_tokens
+            )
+            total_metrics.api_requests += 1
+
+        # Convert grouped data to response format
+        for date_str, data in grouped_data.items():
+            results.append(
+                DailySpendData(
+                    date=datetime.strptime(date_str, "%Y-%m-%d").date(),
+                    metrics=data["metrics"],
+                    breakdown=data["breakdown"],
+                )
+            )
+
+        # Sort results by date
+        results.sort(key=lambda x: x.date, reverse=True)
+
+        return SpendAnalyticsPaginatedResponse(
+            results=results,
+            metadata=DailySpendMetadata(
+                total_spend=total_metrics.spend,
+                total_prompt_tokens=total_metrics.prompt_tokens,
+                total_completion_tokens=total_metrics.completion_tokens,
+                total_api_requests=total_metrics.api_requests,
+                page=page,
+                total_pages=-(-total_count // page_size),  # Ceiling division
+                has_more=(page * page_size) < total_count,
+            ),
+        )
+
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "/spend/daily/analytics: Exception occured - {}".format(str(e))
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to fetch analytics: {str(e)}"},
+        )

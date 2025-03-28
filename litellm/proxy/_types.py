@@ -124,6 +124,14 @@ class LitellmUserRoles(str, enum.Enum):
         }
         return ui_labels.get(self.value, "")
 
+    @property
+    def is_internal_user_role(self) -> bool:
+        """returns true if this role is an `internal_user` or `internal_user_viewer` role"""
+        return self.value in [
+            self.INTERNAL_USER,
+            self.INTERNAL_USER_VIEW_ONLY,
+        ]
+
 
 class LitellmTableNames(str, enum.Enum):
     """
@@ -133,7 +141,7 @@ class LitellmTableNames(str, enum.Enum):
     TEAM_TABLE_NAME = "LiteLLM_TeamTable"
     USER_TABLE_NAME = "LiteLLM_UserTable"
     KEY_TABLE_NAME = "LiteLLM_VerificationToken"
-    PROXY_MODEL_TABLE_NAME = "LiteLLM_ModelTable"
+    PROXY_MODEL_TABLE_NAME = "LiteLLM_ProxyModelTable"
 
 
 def hash_token(token: str):
@@ -248,6 +256,13 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/realtime",
         "/realtime?{model}",
         "/v1/realtime?{model}",
+        # responses API
+        "/responses",
+        "/v1/responses",
+        "/responses/{response_id}",
+        "/v1/responses/{response_id}",
+        "/responses/{response_id}/input_items",
+        "/v1/responses/{response_id}/input_items",
     ]
 
     mapped_pass_through_routes = [
@@ -277,6 +292,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/available",
         "/user/info",
         "/model/info",
+        "/v1/model/info",
         "/v2/model/info",
         "/v2/key/info",
         "/model_group/info",
@@ -371,6 +387,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/predict/spend/logs",
         "/global/activity",
         "/health/services",
+        "/get/litellm_model_cost_map",
     ] + info_routes
 
     internal_user_routes = [
@@ -397,6 +414,8 @@ class LiteLLMRoutes(enum.Enum):
         "/team/member_add",
         "/team/member_delete",
         "/model/new",
+        "/model/update",
+        "/model/delete",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
@@ -1584,11 +1603,11 @@ class NewOrganizationResponse(LiteLLM_OrganizationTable):
 
 class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     user_id: str
-    max_budget: Optional[float]
+    max_budget: Optional[float] = None
     spend: float = 0.0
     model_max_budget: Optional[Dict] = {}
     model_spend: Optional[Dict] = {}
-    user_email: Optional[str]
+    user_email: Optional[str] = None
     models: list = []
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
@@ -1598,6 +1617,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     sso_user_id: Optional[str] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
+    metadata: Optional[dict] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1615,7 +1635,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
 
 class LiteLLM_UserTableFiltered(BaseModel):  # done to avoid exposing sensitive data
     user_id: str
-    user_email: str
+    user_email: Optional[str] = None
 
 
 class LiteLLM_UserTableWithKeyCount(LiteLLM_UserTable):
@@ -1677,18 +1697,16 @@ class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
     endTime: Union[str, datetime, None]
 
 
+AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked"]
+
+
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     id: str
     updated_at: datetime
     changed_by: Optional[Any] = None
     changed_by_api_key: Optional[str] = None
-    action: Literal["created", "updated", "deleted", "blocked"]
-    table_name: Literal[
-        LitellmTableNames.TEAM_TABLE_NAME,
-        LitellmTableNames.USER_TABLE_NAME,
-        LitellmTableNames.KEY_TABLE_NAME,
-        LitellmTableNames.PROXY_MODEL_TABLE_NAME,
-    ]
+    action: AUDIT_ACTIONS
+    table_name: LitellmTableNames
     object_id: str
     before_value: Optional[Json] = None
     updated_values: Optional[Json] = None
@@ -1994,13 +2012,14 @@ class ProxyException(Exception):
         message: str,
         type: str,
         param: Optional[str],
-        code: Optional[Union[int, str]] = None,
+        code: Optional[Union[int, str]] = None,  # maps to status code
         headers: Optional[Dict[str, str]] = None,
+        openai_code: Optional[str] = None,  # maps to 'code'  in openai
     ):
         self.message = str(message)
         self.type = type
         self.param = param
-
+        self.openai_code = openai_code or code
         # If we look on official python OpenAI lib, the code should be a string:
         # https://github.com/openai/openai-python/blob/195c05a64d39c87b2dfdf1eca2d339597f1fce03/src/openai/types/shared/error_object.py#L11
         # Related LiteLLM issue: https://github.com/BerriAI/litellm/discussions/4834
@@ -2052,18 +2071,89 @@ class SpendCalculateRequest(LiteLLMPydanticObjectBase):
 
 class ProxyErrorTypes(str, enum.Enum):
     budget_exceeded = "budget_exceeded"
+    """
+    Object was over budget
+    """
+    no_db_connection = "no_db_connection"
+    """
+    No database connection
+    """
+
+    token_not_found_in_db = "token_not_found_in_db"
+    """
+    Requested token was not found in the database
+    """
+
     key_model_access_denied = "key_model_access_denied"
+    """
+    Key does not have access to the model
+    """
+
     team_model_access_denied = "team_model_access_denied"
+    """
+    Team does not have access to the model
+    """
+
+    user_model_access_denied = "user_model_access_denied"
+    """
+    User does not have access to the model
+    """
+
     expired_key = "expired_key"
+    """
+    Key has expired
+    """
+
     auth_error = "auth_error"
+    """
+    General authentication error
+    """
+
     internal_server_error = "internal_server_error"
+    """
+    Internal server error
+    """
+
     bad_request_error = "bad_request_error"
+    """
+    Bad request error
+    """
+
     not_found_error = "not_found_error"
-    validation_error = "bad_request_error"
+    """
+    Not found error
+    """
+
+    validation_error = "validation_error"
+    """
+    Validation error
+    """
+
     cache_ping_error = "cache_ping_error"
+    """
+    Cache ping error
+    """
+
+    @classmethod
+    def get_model_access_error_type_for_object(
+        cls, object_type: Literal["key", "user", "team"]
+    ) -> "ProxyErrorTypes":
+        """
+        Get the model access error type for object_type
+        """
+        if object_type == "key":
+            return cls.key_model_access_denied
+        elif object_type == "team":
+            return cls.team_model_access_denied
+        elif object_type == "user":
+            return cls.user_model_access_denied
 
 
-DB_CONNECTION_ERROR_TYPES = (httpx.ConnectError, httpx.ReadError, httpx.ReadTimeout)
+DB_CONNECTION_ERROR_TYPES = (
+    httpx.ConnectError,
+    httpx.ReadError,
+    httpx.ReadTimeout,
+)
 
 
 class SSOUserDefinedValues(TypedDict):
@@ -2283,6 +2373,7 @@ class SpecialHeaders(enum.Enum):
     azure_authorization = "API-Key"
     anthropic_authorization = "x-api-key"
     google_ai_studio_authorization = "x-goog-api-key"
+    azure_apim_authorization = "Ocp-Apim-Subscription-Key"
 
 
 class LitellmDataForBackendLLMCall(TypedDict, total=False):
@@ -2586,3 +2677,45 @@ class SpecialManagementEndpointEnums(enum.Enum):
 class TransformRequestBody(BaseModel):
     call_type: CallTypes
     request_body: dict
+
+
+class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
+    """
+    Default parameters to apply when a new user signs in via SSO or is created on the /user/new API endpoint
+    """
+
+    user_role: Optional[
+        Literal[
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        ]
+    ] = Field(
+        default=LitellmUserRoles.INTERNAL_USER,
+        description="Default role assigned to new users created",
+    )
+    max_budget: Optional[float] = Field(
+        default=None,
+        description="Default maximum budget (in USD) for new users created",
+    )
+    budget_duration: Optional[str] = Field(
+        default=None,
+        description="Default budget duration for new users (e.g. 'daily', 'weekly', 'monthly')",
+    )
+    models: Optional[List[str]] = Field(
+        default=None, description="Default list of models that new users can access"
+    )
+
+
+class DailyUserSpendTransaction(TypedDict):
+    user_id: str
+    date: str
+    api_key: str
+    model: str
+    model_group: Optional[str]
+    custom_llm_provider: Optional[str]
+    prompt_tokens: int
+    completion_tokens: int
+    spend: float
+    api_requests: int
