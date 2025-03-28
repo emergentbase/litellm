@@ -1,6 +1,6 @@
 import base64
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union, Tuple
 
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
@@ -253,6 +253,99 @@ class ChunkProcessor:
             transcript="".join(transcript_list),
             id=id,
         )
+
+    def get_thinking_content(
+        self, chunks: List[Dict[str, Any]]
+    ) -> Tuple[Optional[str], Optional[List[Dict[str, Any]]]]:
+        """
+        Extract reasoning content and thinking blocks from stream chunks.
+        
+        Args:
+            chunks: List of stream chunks
+            
+        Returns:
+            Tuple containing:
+            - reasoning_content: Combined reasoning content as a string
+            - thinking_blocks: List of thinking blocks with their type, content, and signature
+        """
+        reasoning_content_list: List[str] = []
+        raw_thinking_blocks: List[Dict[str, Any]] = []
+        
+        # First, extract all reasoning content
+        for chunk in chunks:
+            choices = chunk["choices"]
+            for choice in choices:
+                delta = choice.get("delta", {})
+                
+                # Extract reasoning_content
+                reasoning = delta.get("reasoning_content", "")
+                if reasoning:
+                    reasoning_content_list.append(reasoning)
+                
+                # Extract thinking_blocks from delta
+                thinking_blocks = delta.get("thinking_blocks", [])
+                if thinking_blocks:
+                    raw_thinking_blocks.extend(thinking_blocks)
+                
+                # Extract thinking_blocks from provider_specific_fields
+                provider_fields = delta.get("provider_specific_fields", {})
+                if provider_fields and "thinking_blocks" in provider_fields:
+                    raw_thinking_blocks.extend(provider_fields["thinking_blocks"])
+        
+        # Combine reasoning content
+        combined_reasoning = "".join(reasoning_content_list) if reasoning_content_list else None
+        
+        # If we have no thinking blocks, return early
+        if not raw_thinking_blocks:
+            return combined_reasoning, None
+            
+        # Get the signature if available (typically from the last chunk)
+        signature = None
+        for block in reversed(raw_thinking_blocks):
+            if block.get("signature"):
+                signature = block.get("signature")
+                break
+        
+        # Use the reasoning_content if it's available, as it's already properly combined
+        if combined_reasoning:
+            final_thinking_blocks = [
+                {
+                    "type": "thinking",
+                    "thinking": combined_reasoning,
+                    "signature": signature
+                }
+            ]
+        else:
+            # Otherwise, reconstruct from thinking blocks
+            # Sort by creation time if available
+            sorted_blocks = sorted(
+                [block for block in raw_thinking_blocks if block.get("thinking")],
+                key=lambda x: raw_thinking_blocks.index(x)
+            )
+            
+            # Get unique content by position in the sequence
+            unique_thinking_content = []
+            seen_positions = set()
+            
+            for block in sorted_blocks:
+                thinking = block.get("thinking", "")
+                if thinking and thinking not in seen_positions:
+                    seen_positions.add(thinking)
+                    unique_thinking_content.append(thinking)
+            
+            # Join all the thinking content
+            full_thinking_content = "".join(unique_thinking_content)
+            
+            # Create a single thinking block with signature
+            final_thinking_blocks = [
+                {
+                    "type": "thinking",
+                    "thinking": full_thinking_content,
+                    "signature": signature
+                }
+            ]
+        
+        return combined_reasoning, final_thinking_blocks
 
     def _usage_chunk_calculation_helper(self, usage_chunk: Usage) -> dict:
         prompt_tokens = 0

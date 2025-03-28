@@ -5759,6 +5759,34 @@ def stream_chunk_builder(  # noqa: PLR0915
             _choice = cast(Choices, response.choices[0])
             _choice.message.audio = processor.get_combined_audio_content(audio_chunks)
 
+        # Process thinking/reasoning chunks (Claude, etc)
+        thinking_chunks = [
+            chunk
+            for chunk in chunks
+            if len(chunk["choices"]) > 0
+            and (
+                "reasoning_content" in chunk["choices"][0].get("delta", {})
+                or "thinking_blocks" in chunk["choices"][0].get("delta", {})
+                or (
+                    chunk["choices"][0].get("delta", {}).get("provider_specific_fields") is not None
+                    and "thinking_blocks" in chunk["choices"][0].get("delta", {}).get("provider_specific_fields", {})
+                )
+            )
+        ]
+
+        if len(thinking_chunks) > 0:
+            _choice = cast(Choices, response.choices[0])
+            if not hasattr(_choice.message, "reasoning_content"):
+                _choice.message.reasoning_content = None
+            if not hasattr(_choice.message, "thinking_blocks"):
+                _choice.message.thinking_blocks = None
+                
+            reasoning_content, thinking_blocks = processor.get_thinking_content(thinking_chunks)
+            if reasoning_content:
+                _choice.message.reasoning_content = reasoning_content
+            if thinking_blocks:
+                _choice.message.thinking_blocks = thinking_blocks
+
         completion_output = get_content_from_model_response(response)
 
         usage = processor.calculate_usage(
