@@ -7,6 +7,7 @@ import json
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import httpx  # type: ignore
+from urllib.parse import urlparse
 
 import litellm
 import litellm.litellm_core_utils
@@ -415,7 +416,17 @@ class AnthropicChatCompletion(BaseLLM):
                     client = client
 
                 try:
-                    response = client.post(
+                    if headers.get('X_EMERGENT_LAZY_EXECUTION_RESPONSE') == 'true':
+                        # Extract host from api_base
+                        parsed_url = urlparse(api_base)
+                        host = f"{parsed_url.scheme}://{parsed_url.netloc}"
+                        response = client.get(
+                            url=f"{host}/response/lazy",
+                            params={'request_id': headers['request_id'], 'hash': headers['hash']},
+                            headers=headers,
+                        )
+                    else:
+                        response = client.post(
                         api_base,
                         headers=headers,
                         data=json.dumps(data),
