@@ -745,7 +745,6 @@ class AnthropicConfig(BaseConfig):
         setattr(model_response, "usage", usage)  # type: ignore
 
         model_response._hidden_params = _hidden_params
-        print("KAMRAN custom_response", completion_response.get('custom_response'))
         if completion_response.get('custom_response'):
             model_response.custom_response = completion_response.get('custom_response')
         return model_response
