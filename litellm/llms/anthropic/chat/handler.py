@@ -416,7 +416,7 @@ class AnthropicChatCompletion(BaseLLM):
                     client = client
 
                 try:
-                    if headers.get('X_EMERGENT_LAZY_EXECUTION_RESPONSE') == 'true':
+                    if headers.get('X_EMERGENT_LAZY_EXECUTION_RESPONSE') == 'true' and 'claude' in headers.get('X_EMERGENT_MODEL_NAME').lower():
                         # Extract host from api_base
                         parsed_url = urlparse(api_base)
                         host = f"{parsed_url.scheme}://{parsed_url.netloc}"
@@ -432,7 +432,7 @@ class AnthropicChatCompletion(BaseLLM):
                         data=json.dumps(data),
                         timeout=timeout,
                     )
-                    if headers.get('X_EMERGENT_LAZY_EXECUTION') == 'true':
+                    if headers.get('X_EMERGENT_LAZY_EXECUTION') == 'true' and 'claude' in headers.get('X_EMERGENT_MODEL_NAME').lower():
                         response_json = json.loads(response.text)
                         base_response = '{"id": "msg_0174iYenFKrYVGmuiD4FRYQ2", "type": "message", "role": "assistant", "model": "claude-3-7-sonnet-20250219", "content": [], "stop_reason": "tool_use", "stop_sequence": null, "usage": {"input_tokens": 6, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 8252, "output_tokens": 79}}'
                         base_response_json = json.loads(base_response)
