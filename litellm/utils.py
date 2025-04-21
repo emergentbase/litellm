@@ -1844,6 +1844,7 @@ def token_counter(
     tool_choice: Optional[ChatCompletionNamedToolChoiceParam] = None,
     use_default_image_token_count: Optional[bool] = False,
     default_token_count: Optional[int] = None,
+    **kwargs # accept extra kwargs for future use
 ) -> int:
     """
     Count the number of tokens in a given text using a specified model.
