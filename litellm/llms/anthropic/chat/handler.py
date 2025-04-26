@@ -7,6 +7,7 @@ import json
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import httpx  # type: ignore
+from urllib.parse import urlparse
 
 import litellm
 import litellm.litellm_core_utils
@@ -415,12 +416,37 @@ class AnthropicChatCompletion(BaseLLM):
                     client = client
 
                 try:
-                    response = client.post(
+                    if headers.get('X_EMERGENT_LAZY_EXECUTION_RESPONSE') == 'true':
+                        # Extract host from api_base
+                        parsed_url = urlparse(api_base)
+                        host = f"{parsed_url.scheme}://{parsed_url.netloc}"
+                        response = client.get(
+                            url=f"{host}/response/lazy",
+                            params={'request_id': headers['request_id'], 'hash': headers['hash']},
+                            headers=headers,
+                        )
+                    else:
+                        response = client.post(
                         api_base,
                         headers=headers,
                         data=json.dumps(data),
                         timeout=timeout,
                     )
+                    if headers.get('X_EMERGENT_LAZY_EXECUTION') == 'true':
+                        response_json = json.loads(response.text)
+                        base_response = '{"id": "msg_0174iYenFKrYVGmuiD4FRYQ2", "type": "message", "role": "assistant", "model": "claude-3-7-sonnet-20250219", "content": [], "stop_reason": "tool_use", "stop_sequence": null, "usage": {"input_tokens": 6, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 8252, "output_tokens": 79}}'
+                        base_response_json = json.loads(base_response)
+                        base_response_json["custom_response"] = response_json
+                        modified_json = json.dumps(base_response_json)
+                        new_headers = dict(response.headers)
+                        if 'content-encoding' in new_headers:
+                            del new_headers['content-encoding']
+                        response = httpx.Response(
+                            status_code=response.status_code,
+                            headers=new_headers,
+                            content=modified_json.encode('utf-8'),
+                            request=response.request
+                        )
                 except Exception as e:
                     status_code = getattr(e, "status_code", 500)
                     error_headers = getattr(e, "headers", None)
