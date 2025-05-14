@@ -17,7 +17,6 @@ from litellm.types.rerank import RerankRequest
 
 
 class ModelParamHelper:
-
     @staticmethod
     def get_standard_logging_model_parameters(
         model_parameters: dict,
@@ -77,17 +76,28 @@ class ModelParamHelper:
         return combined_kwargs
 
     @staticmethod
+    def get_litellm_provider_specific_params_for_chat_params() -> Set[str]:
+        return set(["thinking"])
+
+    @staticmethod
     def _get_litellm_supported_chat_completion_kwargs() -> Set[str]:
         """
         Get the litellm supported chat completion kwargs
 
         This follows the OpenAI API Spec
         """
-        all_chat_completion_kwargs = set(
+        non_streaming_params: Set[str] = set(
             getattr(CompletionCreateParamsNonStreaming, "__annotations__", {}).keys()
-        ).union(
-            set(getattr(CompletionCreateParamsStreaming, "__annotations__", {}).keys())
         )
+        streaming_params: Set[str] = set(
+            getattr(CompletionCreateParamsStreaming, "__annotations__", {}).keys()
+        )
+        litellm_provider_specific_params: Set[str] = (
+            ModelParamHelper.get_litellm_provider_specific_params_for_chat_params()
+        )
+        all_chat_completion_kwargs: Set[str] = non_streaming_params.union(
+            streaming_params
+        ).union(litellm_provider_specific_params)
         return all_chat_completion_kwargs
 
     @staticmethod
@@ -138,13 +148,22 @@ class ModelParamHelper:
                 TranscriptionCreateParamsNonStreaming,
                 TranscriptionCreateParamsStreaming,
             )
-            non_streaming_kwargs = set(getattr(TranscriptionCreateParamsNonStreaming, "__annotations__", {}).keys())
-            streaming_kwargs = set(getattr(TranscriptionCreateParamsStreaming, "__annotations__", {}).keys())
+
+            non_streaming_kwargs = set(
+                getattr(
+                    TranscriptionCreateParamsNonStreaming, "__annotations__", {}
+                ).keys()
+            )
+            streaming_kwargs = set(
+                getattr(
+                    TranscriptionCreateParamsStreaming, "__annotations__", {}
+                ).keys()
+            )
 
             all_transcription_kwargs = non_streaming_kwargs.union(streaming_kwargs)
             return all_transcription_kwargs
         except Exception as e:
-            verbose_logger.warning("Error getting transcription kwargs %s", str(e))
+            verbose_logger.debug("Error getting transcription kwargs %s", str(e))
             return set()
 
     @staticmethod
