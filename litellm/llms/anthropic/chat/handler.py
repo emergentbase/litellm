@@ -426,6 +426,8 @@ class AnthropicChatCompletion(BaseLLM):
                             headers=headers,
                         )
                     else:
+                        if headers.get('X-emergent-proxy-api-key'):
+                            api_base = api_base.replace(":rawPredict", '')
                         response = client.post(
                         api_base,
                         headers=headers,
