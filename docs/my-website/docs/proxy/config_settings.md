@@ -1,6 +1,5 @@
 # All settings
 
-
 ```yaml
 environment_variables: {}
 
@@ -95,6 +94,8 @@ general_settings:
   allowed_routes: ["route1", "route2"]  # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
   key_management_system: google_kms  # either google_kms or azure_kms
   master_key: string
+  maximum_spend_logs_retention_period: 30d # The maximum time to retain spend logs before deletion.
+  maximum_spend_logs_retention_interval: 1d # interval in which the spend log cleanup task should run in.
 
   # Database Settings
   database_url: string
@@ -211,7 +212,8 @@ general_settings:
 | enable_oauth2_proxy_auth | boolean | (Enterprise Feature) If true, enables oauth2.0 authentication |
 | forward_openai_org_id | boolean | If true, forwards the OpenAI Organization ID to the backend LLM call (if it's OpenAI). |
 | forward_client_headers_to_llm_api | boolean | If true, forwards the client headers (any `x-` headers) to the backend LLM call |
-
+| maximum_spend_logs_retention_period               | str                   | Used to set the max retention time for spend logs in the db, after which they will be auto-purged                                                                                                                                                                                                                             |
+| maximum_spend_logs_retention_interval | str | Used to set the interval in which the spend log cleanup task should run in.                                                                                                                                                                                                                                                   |
 ### router_settings - Reference
 
 :::info
@@ -384,6 +386,7 @@ router_settings:
 | DEFAULT_IN_MEMORY_TTL | Default time-to-live for in-memory cache in seconds. Default is 5
 | DEFAULT_MAX_LRU_CACHE_SIZE | Default maximum size for LRU cache. Default is 16
 | DEFAULT_MAX_RECURSE_DEPTH | Default maximum recursion depth. Default is 100
+| DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER | Default maximum recursion depth for sensitive data masker. Default is 10
 | DEFAULT_MAX_RETRIES | Default maximum retry attempts. Default is 2
 | DEFAULT_MAX_TOKENS | Default maximum tokens for LLM calls. Default is 4096
 | DEFAULT_MAX_TOKENS_FOR_TRITON | Default maximum tokens for Triton models. Default is 2000
@@ -523,6 +526,7 @@ router_settings:
 | MAX_TILE_HEIGHT | Maximum height for image tiles. Default is 512
 | MAX_TILE_WIDTH | Maximum width for image tiles. Default is 512
 | MAX_TOKEN_TRIMMING_ATTEMPTS | Maximum number of attempts to trim a token message. Default is 10
+| MAXIMUM_TRACEBACK_LINES_TO_LOG | Maximum number of lines to log in traceback in LiteLLM Logs UI. Default is 100
 | MAX_RETRY_DELAY | Maximum delay in seconds for retrying requests. Default is 8.0
 | MIN_NON_ZERO_TEMPERATURE | Minimum non-zero temperature value. Default is 0.0001
 | MINIMUM_PROMPT_CACHE_TOKEN_COUNT | Minimum token count for caching a prompt. Default is 1024
@@ -548,9 +552,12 @@ router_settings:
 | OPENMETER_API_KEY | API key for OpenMeter services
 | OPENMETER_EVENT_TYPE | Type of events sent to OpenMeter
 | OTEL_ENDPOINT | OpenTelemetry endpoint for traces
+| OTEL_EXPORTER_OTLP_ENDPOINT | OpenTelemetry endpoint for traces
 | OTEL_ENVIRONMENT_NAME | Environment name for OpenTelemetry
 | OTEL_EXPORTER | Exporter type for OpenTelemetry
+| OTEL_EXPORTER_OTLP_PROTOCOL | Exporter type for OpenTelemetry
 | OTEL_HEADERS | Headers for OpenTelemetry requests
+| OTEL_EXPORTER_OTLP_HEADERS | Headers for OpenTelemetry requests
 | OTEL_SERVICE_NAME | Service name identifier for OpenTelemetry
 | OTEL_TRACER_NAME | Tracer name for OpenTelemetry tracing
 | PAGERDUTY_API_KEY | API key for PagerDuty Alerting
@@ -630,3 +637,4 @@ router_settings:
 | USE_AWS_KMS | Flag to enable AWS Key Management Service for encryption
 | USE_PRISMA_MIGRATE | Flag to use prisma migrate instead of prisma db push. Recommended for production environments.
 | WEBHOOK_URL | URL for receiving webhooks from external services
+| SPEND_LOG_RUN_LOOPS | Constant for setting how many runs of 1000 batch deletes should spend_log_cleanup task run 
