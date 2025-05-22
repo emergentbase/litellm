@@ -96,7 +96,7 @@ class AnthropicConfig(BaseConfig):
             "user",
         ]
 
-        if "claude-3-7-sonnet" in model:
+        if "claude-3-7-sonnet" in model or "claude-sonnet-4" in model:
             params.append("thinking")
 
         return params
