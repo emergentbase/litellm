@@ -416,6 +416,8 @@ class AnthropicChatCompletion(BaseLLM):
                     client = client
 
                 try:
+                    if headers.get('X-emergent-proxy-api-key'):
+                        api_base = api_base.replace(":rawPredict", '')
                     if headers.get('X_EMERGENT_LAZY_EXECUTION_RESPONSE') == 'true':
                         # Extract host from api_base
                         parsed_url = urlparse(api_base)
