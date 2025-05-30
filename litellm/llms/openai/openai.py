@@ -56,6 +56,7 @@ from .common_utils import (
 from openai.types.chat.chat_completion import Choice, ChatCompletion
 from openai.types.completion_usage import CompletionUsage, CompletionTokensDetails, PromptTokensDetails
 from openai.types.chat.chat_completion_message import ChatCompletionMessage
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 openaiOSeriesConfig = OpenAIOSeriesConfig()
 
