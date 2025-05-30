@@ -560,6 +560,9 @@ def convert_to_model_response_object(  # noqa: PLR0915
             for k, v in response_object.items():
                 if k not in special_keys:
                     setattr(model_response_object, k, v)
+                    
+            if "custom_response" in response_object:
+                model_response_object.custom_response = response_object["custom_response"]
 
             return model_response_object
         elif response_type == "embedding" and (
