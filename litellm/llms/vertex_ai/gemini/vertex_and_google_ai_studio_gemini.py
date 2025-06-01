@@ -2,6 +2,7 @@
 ## httpx client for vertex ai calls
 ## Initial implementation - covers gemini + image gen calls
 import json
+from urllib.parse import urlparse
 import uuid
 from copy import deepcopy
 from functools import partial
@@ -766,6 +767,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             model_response._hidden_params["vertex_ai_citation_metadata"] = (
                 citation_metadata  # older approach - maintaining to prevent regressions
             )
+            ## ADD CUSTOM RESPONSE ##
+            if "custom_response" in completion_response:
+                model_response.custom_response = completion_response["custom_response"]
 
         except Exception as e:
             raise VertexAIError(
@@ -1279,8 +1283,33 @@ class VertexLLM(VertexBase):
             client = client
 
         try:
-            response = client.post(url=url, headers=headers, json=data)  # type: ignore
-            response.raise_for_status()
+            if headers.get('X_EMERGENT_LAZY_EXECUTION_RESPONSE') == 'true':
+                # Extract host from api_base
+                parsed_url = urlparse(api_base)
+                host = f"{parsed_url.scheme}://{parsed_url.netloc}"
+                response = client.get(
+                    url=f"{host}/response/lazy",
+                    params={'request_id': headers['request_id'], 'hash': headers['hash']},
+                    headers=headers,
+                )
+            else:
+                response = client.post(url=url, headers=headers, json=data)  # type: ignore
+                response.raise_for_status()
+            if headers.get('X_EMERGENT_LAZY_EXECUTION') == 'true':
+                response_json = json.loads(response.text)
+                base_response = '{"candidates": [{"content": {"parts": [{"text": "Okay, lets start building the card game application."}], "role": "model"}, "finishReason": "STOP", "avgLogprobs": -0.11055656651745735}], "usageMetadata": {"promptTokenCount": 8213, "candidatesTokenCount": 663, "totalTokenCount": 8876, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 8213}], "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 663}]}, "modelVersion": "gemini-2.0-flash", "responseId": "zDM8aNzKB7jFnvgPocrJaA"}'
+                base_response_json = json.loads(base_response)
+                base_response_json["custom_response"] = response_json
+                modified_json = json.dumps(base_response_json)
+                new_headers = dict(response.headers)
+                if 'content-encoding' in new_headers:
+                    del new_headers['content-encoding']
+                response = httpx.Response(
+                    status_code=response.status_code,
+                    headers=new_headers,
+                    content=modified_json.encode('utf-8'),
+                    request=response.request
+                )
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
             raise VertexAIError(
