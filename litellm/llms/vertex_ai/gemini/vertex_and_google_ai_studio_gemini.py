@@ -618,6 +618,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ),
             total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,
+            thought_tokens=completion_response["usageMetadata"].get("thoughtsTokenCount", 0)
         )
 
         return usage
