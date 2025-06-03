@@ -188,14 +188,14 @@ class VertexBase(BaseLLM):
         """
         if api_base:
             if custom_llm_provider == "gemini":
-                url = "{}?{}&key={}".format(api_base, endpoint, gemini_api_key)
+                url = "{}?{}".format(api_base, endpoint)
                 if gemini_api_key is None:
                     raise ValueError(
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
                     )
-                # auth_header = (
-                #     gemini_api_key  # cloudflare expects api key as bearer token
-                # )
+                auth_header = (
+                    gemini_api_key  # cloudflare expects api key as bearer token
+                )
             else:
                 url = "{}:{}".format(api_base, endpoint)
 
