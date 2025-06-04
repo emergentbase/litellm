@@ -419,6 +419,7 @@ class AnthropicChatCompletion(BaseLLM):
                     if headers.get('X-emergent-proxy-api-key'):
                         api_base = api_base.replace(":rawPredict", '')
                     if headers.get('X_EMERGENT_LAZY_EXECUTION_RESPONSE') == 'true':
+                        # call llm proxy to get response from db.
                         # Extract host from api_base
                         parsed_url = urlparse(api_base)
                         host = f"{parsed_url.scheme}://{parsed_url.netloc}"
@@ -435,6 +436,10 @@ class AnthropicChatCompletion(BaseLLM):
                         timeout=timeout,
                     )
                     if headers.get('X_EMERGENT_LAZY_EXECUTION') == 'true':
+                        # handle llm proxy response after saving request payload in db
+                        # creating dummy response to hanlde parsing. Actual response is hash and request_id from llm proxy
+                        # dummy response field are just placeholders for parsing and will be rejected in downstream code.
+                        # custom_response is actual response from llm proxy.
                         response_json = json.loads(response.text)
                         base_response = '{"id": "msg_0174iYenFKrYVGmuiD4FRYQ2", "type": "message", "role": "assistant", "model": "claude-3-7-sonnet-20250219", "content": [], "stop_reason": "tool_use", "stop_sequence": null, "usage": {"input_tokens": 6, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 8252, "output_tokens": 79}}'
                         base_response_json = json.loads(base_response)

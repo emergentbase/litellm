@@ -1285,6 +1285,7 @@ class VertexLLM(VertexBase):
 
         try:
             if headers.get('X_EMERGENT_LAZY_EXECUTION_RESPONSE') == 'true':
+                # call llm proxy to get response from db.
                 # Extract host from api_base
                 parsed_url = urlparse(api_base)
                 host = f"{parsed_url.scheme}://{parsed_url.netloc}"
@@ -1297,6 +1298,10 @@ class VertexLLM(VertexBase):
                 response = client.post(url=url, headers=headers, json=data)  # type: ignore
                 response.raise_for_status()
             if headers.get('X_EMERGENT_LAZY_EXECUTION') == 'true':
+                # handle llm proxy response after saving request payload in db
+                # creating dummy response to hanlde parsing. Actual response is hash and request_id from llm proxy
+                # dummy response field are just placeholders for parsing and will be rejected in downstream code.
+                # custom_response is actual response from llm proxy.
                 response_json = json.loads(response.text)
                 base_response = '{"candidates": [{"content": {"parts": [{"text": "Okay, lets start building the card game application."}], "role": "model"}, "finishReason": "STOP", "avgLogprobs": -0.11055656651745735}], "usageMetadata": {"promptTokenCount": 8213, "candidatesTokenCount": 663, "totalTokenCount": 8876, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 8213}], "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 663}]}, "modelVersion": "gemini-2.0-flash", "responseId": "zDM8aNzKB7jFnvgPocrJaA"}'
                 base_response_json = json.loads(base_response)
