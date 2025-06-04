@@ -756,6 +756,9 @@ class Usage(CompletionUsage):
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
 
+    thought_tokens: Optional[int] = 0
+    """Number of tokens used for reasoning."""
+
     def __init__(
         self,
         prompt_tokens: Optional[int] = None,

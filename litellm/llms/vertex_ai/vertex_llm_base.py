@@ -188,7 +188,7 @@ class VertexBase(BaseLLM):
         """
         if api_base:
             if custom_llm_provider == "gemini":
-                url = "{}:{}".format(api_base, endpoint)
+                url = "{}?{}".format(api_base, endpoint)
                 if gemini_api_key is None:
                     raise ValueError(
                         "Missing gemini_api_key, please set `GEMINI_API_KEY`"
@@ -200,7 +200,10 @@ class VertexBase(BaseLLM):
                 url = "{}:{}".format(api_base, endpoint)
 
             if stream is True:
-                url = url + "?alt=sse"
+                if "?" in url:
+                    url = url + "&alt=sse"
+                else:
+                    url = url + "?alt=sse"
         return auth_header, url
 
     def _get_token_and_url(
