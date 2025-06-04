@@ -653,7 +653,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                             },
                         )
 
-                        if headers.get('X_EMERGENT_LAZY_EXECUTION_RESPONSE') == 'true':
+                        is_emergent_lazy_execution = headers.get('X_EMERGENT_LAZY_EXECUTION') == 'true'
+                        is_emergent_lazy_execution_response = headers.get('X_EMERGENT_LAZY_EXECUTION_RESPONSE') == 'true'
+
+                        if is_emergent_lazy_execution_response:
                             # call llm proxy to get response from db.
                             client = HTTPHandler(timeout=timeout)  # type: ignore
                             # Extract host from api_base
@@ -674,7 +677,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                                     logging_obj=logging_obj,
                                 )
                             )
-                        if headers.get('X_EMERGENT_LAZY_EXECUTION') == 'true':
+                        if is_emergent_lazy_execution:
                             # handle llm proxy response after saving request payload in db
                             # creating dummy response to hanlde parsing. Actual response is hash and request_id from llm proxy
                             # dummy response field are just placeholders for parsing and will be rejected in downstream code.
