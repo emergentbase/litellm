@@ -677,6 +677,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                                     logging_obj=logging_obj,
                                 )
                             )
+                            stringified_response = response.model_dump()
                         if is_emergent_lazy_execution:
                             # handle llm proxy response after saving request payload in db
                             # creating dummy response to hanlde parsing. Actual response is hash and request_id from llm proxy
