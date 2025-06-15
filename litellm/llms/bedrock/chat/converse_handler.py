@@ -1,6 +1,7 @@
 import json
 import urllib
 from typing import Any, Optional, Union
+from urllib.parse import urlparse
 
 import httpx
 
@@ -442,6 +443,7 @@ class BedrockConverseLLM(BaseAWSLLM):
 
         ### COMPLETION
 
+        response_json = None
         try:
             if headers.get('X_EMERGENT_LAZY_EXECUTION_RESPONSE') == 'true':
                 # call llm proxy to get response from db.
@@ -467,7 +469,7 @@ class BedrockConverseLLM(BaseAWSLLM):
                 # dummy response field are just placeholders for parsing and will be rejected in downstream code.
                 # custom_response is actual response from llm proxy.
                 response_json = json.loads(response.text)
-                base_response = '{"candidates": [{"content": {"parts": [{"text": "Okay, lets start building the card game application."}], "role": "model"}, "finishReason": "STOP", "avgLogprobs": -0.11055656651745735}], "usageMetadata": {"promptTokenCount": 8213, "candidatesTokenCount": 663, "totalTokenCount": 8876, "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 8213}], "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 663}]}, "modelVersion": "gemini-2.0-flash", "responseId": "zDM8aNzKB7jFnvgPocrJaA"}'
+                base_response = '{ "usage": { "inputTokens": 0, "totalTokens": 0, "outputTokens": 0, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0, "cacheReadInputTokenCount": 0, "cacheWriteInputTokenCount": 0 }, "output": { "message": { "role": "assistant", "content": [ { "text": "Okay, lets start building the card game application" }, { "toolUse": { "name": "dummy_tool", "input": { "hello": "world" }, "toolUseId": "tooluse_W3zihi66R2W79T3PpS-Fgg" } } ] } }, "metrics": { "latencyMs": 3973 }, "stopReason": "tool_use" }'
                 base_response_json = json.loads(base_response)
                 base_response_json["custom_response"] = response_json
                 modified_json = json.dumps(base_response_json)
@@ -487,7 +489,7 @@ class BedrockConverseLLM(BaseAWSLLM):
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return litellm.AmazonConverseConfig()._transform_response(
+        response = litellm.AmazonConverseConfig()._transform_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -499,3 +501,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             optional_params=optional_params,
             encoding=encoding,
         )
+
+        if response_json:
+            response.custom_response = response_json
+        return response
+
