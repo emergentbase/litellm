@@ -1,6 +1,7 @@
 import json
 import urllib
 from typing import Any, Optional, Union
+from urllib.parse import urlparse
 
 import httpx
 
@@ -442,21 +443,53 @@ class BedrockConverseLLM(BaseAWSLLM):
 
         ### COMPLETION
 
+        response_json = None
         try:
-            response = client.post(
-                url=proxy_endpoint_url,
-                headers=prepped.headers,
-                data=data,
-                logging_obj=logging_obj,
-            )  # type: ignore
-            response.raise_for_status()
+            if headers.get('X_EMERGENT_LAZY_EXECUTION_RESPONSE') == 'true':
+                # call llm proxy to get response from db.
+                # Extract host from api_base
+                parsed_url = urlparse(api_base)
+                host = f"{parsed_url.scheme}://{parsed_url.netloc}"
+                response = client.get(
+                    url=f"{host}/response/lazy",
+                    params={'request_id': headers['request_id'], 'hash': headers['hash']},
+                    headers=headers,
+                )
+            else:
+                response = client.post(
+                    url=proxy_endpoint_url,
+                    headers=prepped.headers,
+                    data=data,
+                    logging_obj=logging_obj,
+                )  # type: ignore
+                response.raise_for_status()
+            if headers.get('X_EMERGENT_LAZY_EXECUTION') == 'true':
+                # handle llm proxy response after saving request payload in db
+                # creating dummy response to hanlde parsing. Actual response is hash and request_id from llm proxy
+                # dummy response field are just placeholders for parsing and will be rejected in downstream code.
+                # custom_response is actual response from llm proxy.
+                response_json = json.loads(response.text)
+                base_response = '{ "usage": { "inputTokens": 0, "totalTokens": 0, "outputTokens": 0, "cacheReadInputTokens": 0, "cacheWriteInputTokens": 0, "cacheReadInputTokenCount": 0, "cacheWriteInputTokenCount": 0 }, "output": { "message": { "role": "assistant", "content": [ { "text": "Okay, lets start building the card game application" }, { "toolUse": { "name": "dummy_tool", "input": { "hello": "world" }, "toolUseId": "tooluse_W3zihi66R2W79T3PpS-Fgg" } } ] } }, "metrics": { "latencyMs": 3973 }, "stopReason": "tool_use" }'
+                base_response_json = json.loads(base_response)
+                base_response_json["custom_response"] = response_json
+                modified_json = json.dumps(base_response_json)
+                new_headers = dict(response.headers)
+                if 'content-encoding' in new_headers:
+                    del new_headers['content-encoding']
+                response = httpx.Response(
+                    status_code=response.status_code,
+                    headers=new_headers,
+                    content=modified_json.encode('utf-8'),
+                    request=response.request
+                )
+
         except httpx.HTTPStatusError as err:
             error_code = err.response.status_code
             raise BedrockError(status_code=error_code, message=err.response.text)
         except httpx.TimeoutException:
             raise BedrockError(status_code=408, message="Timeout error occurred.")
 
-        return litellm.AmazonConverseConfig()._transform_response(
+        response = litellm.AmazonConverseConfig()._transform_response(
             model=model,
             response=response,
             model_response=model_response,
@@ -468,3 +501,8 @@ class BedrockConverseLLM(BaseAWSLLM):
             optional_params=optional_params,
             encoding=encoding,
         )
+
+        if response_json:
+            response.custom_response = response_json
+        return response
+
